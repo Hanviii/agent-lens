@@ -1,0 +1,82 @@
+
+from time import perf_counter
+
+from fastapi import APIRouter, HTTPException
+
+from app.schemas.query_schema import QueryRequest, QueryResponse
+from app.services.intent_parser import extract_intent
+from app.services.llama_service import extract_intent_with_llama
+from app.services.cypher_generator import generate_cypher
+from app.services.query_executor import (
+    execute_cypher,
+    QueryExecutionError,
+)
+from app.services.response_formatter import format_response
+
+router = APIRouter(prefix="/api", tags=["Query"])
+
+
+@router.post("/query", response_model=QueryResponse)
+def query_products(request: QueryRequest):
+    started = perf_counter()
+
+    try:
+        # Try local Llama first. Fall back to the existing parser
+        # if Ollama is unavailable or its response is invalid.
+        try:
+            intent = extract_intent_with_llama(request.question)
+            print("AgentLens: using Llama intent extraction")
+        except Exception as exc:
+            print(
+                "AgentLens: Llama extraction failed; "
+                f"using rule-based fallback ({type(exc).__name__})"
+            )
+            intent = extract_intent(request.question)
+
+        # Keep query construction and database execution controlled
+        # by the existing application code.
+        cypher, params = generate_cypher(intent)
+        print("DEBUG category:", intent.get("category"))
+        print("DEBUG exclusion count:", len(params.get("headphone_exclusions", [])))
+        print(
+            "DEBUG exclusion predicate:",
+            "all(term IN $headphone_exclusions" in cypher
+        )
+
+        print("DEBUG category:", intent.get("category"))
+        print("DEBUG exclusion count:", len(params.get("headphone_exclusions", [])))
+        print("DEBUG exclusion predicate:", "all(term IN $headphone_exclusions" in cypher)
+        print("DEBUG generated query:", cypher)
+        result = execute_cypher(cypher, params)
+
+        response = format_response(
+            result["records"],
+            result["execution_time_ms"],
+        )
+
+        response["execution_time_ms"] = round(
+            (perf_counter() - started) * 1000,
+            2,
+        )
+
+        return response
+
+    except QueryExecutionError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        # Log the exception server-side without exposing internals.
+        print(
+            f"AgentLens query error: {type(exc).__name__}: {exc}"
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Unable to process your product search. "
+                "Please try again."
+            ),
+        ) from exc
