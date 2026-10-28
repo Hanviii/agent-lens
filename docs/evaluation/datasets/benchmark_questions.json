@@ -1,0 +1,42 @@
+
+[
+    {
+      "question": "Find keyboards under $50",
+      "expected_category": "keyboards",
+      "max_price": 50,
+      "min_rating": null,
+      "sort_by": "relevance"
+    },
+    {
+      "question": "Find keyboards under $50 rated above 4 stars",
+      "expected_category": "keyboards",
+      "max_price": 50,
+      "min_rating": 4,
+      "rating_operator": ">",
+      "sort_by": "relevance"
+    },
+    {
+      "question": "Find the cheapest keyboards under $50",
+      "expected_category": "keyboards",
+      "max_price": 50,
+      "sort_by": "price_asc"
+    },
+    {
+      "question": "Find the highest rated keyboards",
+      "expected_category": "keyboards",
+      "sort_by": "rating_desc"
+    },
+    {
+      "question": "Find headphones under $30",
+      "expected_category": "headphones",
+      "max_price": 30,
+      "sort_by": "relevance"
+    },
+    {
+      "question": "Find laptops above $300 rated 4 stars",
+      "expected_category": "computers",
+      "min_price": 300,
+      "min_rating": 4,
+      "sort_by": "relevance"
+    }
+  ]

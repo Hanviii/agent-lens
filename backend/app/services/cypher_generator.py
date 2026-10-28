@@ -1,0 +1,321 @@
+
+from typing import Any
+
+
+ALLOWED_SORTS = {
+    "relevance": "relevance_score DESC, p.average_rating DESC, p.title ASC",
+    "rating_desc": "p.average_rating DESC, p.title ASC",
+    "price_asc": "p.price ASC, p.title ASC",
+    "price_desc": "p.price DESC, p.title ASC",
+}
+
+
+CATEGORY_TERMS = {
+    "computers": ["computer", "laptop", "desktop", "pc"],
+    "phones": ["phone", "smartphone", "cell phone"],
+    "headphones": ["headphone", "earbud", "earphone"],
+    "keyboards": ["keyboard"],
+    "cameras": ["camera", "webcam"],
+    "speakers": ["speaker"],
+    "monitors": ["monitor", "display"],
+    "tablets": ["tablet", "ipad"],
+    "smartwatches": ["smartwatch", "smart watch", "fitness tracker"],
+    "chargers": ["charger", "charging cable"],
+}
+
+
+# Exclude accessories from headphone searches.
+HEADPHONE_EXCLUSIONS = [
+    "carrying case",
+    "storage case",
+    "protective case",
+    "headphone case",
+    "headset case",
+    "carrying pouch",
+    "earbud case",
+    "earbuds case",
+    "replacement cable",
+    "replacement cord",
+    "audio cord",
+    "replacement audio",
+    "earphone cable",
+    "earbud cable",
+    "charging cable",
+    "replacement ear pads",
+    "replacement earpads",
+    "replacement ear cushions",
+    "replacement headband",
+    "replacement arch band",
+    "replacement parts",
+    "ear tips",
+    "ear tip replacement",
+    "earloops kit",
+    "ear loops",
+    "headphone stand",
+    "headphones stand",
+    "headphone holder",
+    "headset holder",
+    "headphone hook",
+    "headphone splitter",
+    "audio splitter",
+    "headphone adapter",
+    "adapter converter",
+    "extension extender",
+    "headphone skin",
+    "earbud skin",
+    "earbuds skin",
+    "skin for",
+    "vinyl decal",
+    "power supply",
+    "charger",
+    "cable ties",
+    "cord organizer",
+    "wire clips",
+    "headphone interface",
+    "headphone accessories",
+    "headset accessories",
+    "backpack",
+    "replacement extra small earmold",
+    "replacement earbuds tip",
+    "ear tip replacement",
+    "earbud tip",
+    "earbuds tip",
+    "earpads",
+        # Carrying cases and storage bags
+    "hard case",
+    "headphones case",
+    "headphone carrying case",
+    "headphones carrying case",
+    "storage bag",
+    "carrying storage bag",
+    "travel case",
+
+    # Audio adapters and cables
+    "aux cable",
+    "adapter aux cable",
+    "rca to 3.5mm cable",
+    "3.5mm to 2-male rca",
+    "rca aux cord",
+    "audio adapter",
+    "audio splitter cable",
+    "lightning to male 3.5mm",
+    "earbud cap",
+    "earbud tips",
+    "earbud tip",
+    "silicone earbud",
+    "earbud cover",
+    "audio cable replacement",
+    "coiled audio cable",
+    "aux cord",
+    "replacement aux cord",
+]
+
+
+# Exclude common keyboard accessories.
+KEYBOARD_EXCLUSIONS = [
+    "keyboard adapter",
+    "keyboard cover",
+    "keyboard skin",
+    "keyboard case",
+    "keyboard stand",
+    "keyboard holder",
+    "keycap",
+    "key cap",
+    "individual key",
+    "replacement key",
+    "keyboard cable",
+    "keyboard extension cable",
+    "keyboard dongle",
+    "keyboard decal",
+]
+
+
+def generate_cypher(
+    intent: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """Generate a parameterized, read-only product search query."""
+
+    conditions: list[str] = []
+    params: dict[str, Any] = {}
+
+    keywords = intent.get("keywords") or []
+    keyword = keywords[0].strip().lower() if keywords else ""
+
+    category = intent.get("category")
+    terms = CATEGORY_TERMS.get(category, [])
+
+    # Match the requested category against product titles.
+    if terms:
+        category_conditions = []
+
+        for i, term in enumerate(terms):
+            param_name = f"category_term_{i}"
+            category_conditions.append(
+                "toLower(coalesce(p.title, '')) "
+                f"CONTAINS ${param_name}"
+            )
+            params[param_name] = term
+
+        conditions.append(
+            "(" + " OR ".join(category_conditions) + ")"
+        )
+
+    # Narrow broad computer searches to the requested product type.
+    product_type = intent.get("product_type")
+
+    if product_type == "laptop":
+        conditions.append(
+            "("
+            "toLower(coalesce(p.title, '')) CONTAINS 'laptop' "
+            "OR toLower(coalesce(p.title, '')) CONTAINS 'notebook'"
+            ")"
+        )
+
+    elif product_type == "desktop":
+        conditions.append(
+            "("
+            "toLower(coalesce(p.title, '')) CONTAINS 'desktop' "
+            "OR toLower(coalesce(p.title, '')) CONTAINS 'desktop pc'"
+            ")"
+        )
+
+    elif product_type == "all_in_one":
+        conditions.append(
+            "("
+            "toLower(coalesce(p.title, '')) CONTAINS 'all-in-one' "
+            "OR toLower(coalesce(p.title, '')) CONTAINS 'all in one'"
+            ")"
+        )
+
+    # Apply an additional keyword filter when supplied.
+    if keyword and not product_type:
+        conditions.append(
+            "("
+            "toLower(coalesce(p.title, '')) CONTAINS $keyword "
+            "OR toLower(coalesce(p.description, '')) "
+            "CONTAINS $keyword"
+            ")"
+        )
+        params["keyword"] = keyword
+
+    # Exclude common keyboard accessories using a list parameter.
+    if category == "keyboards":
+        params["keyboard_exclusions"] = KEYBOARD_EXCLUSIONS
+
+        conditions.append(
+            "all(term IN $keyboard_exclusions "
+            "WHERE NOT toLower(coalesce(p.title, '')) CONTAINS term)"
+        )
+
+    # Exclude common headphone accessories using a list parameter.
+    if category == "headphones":
+        params["headphone_exclusions"] = HEADPHONE_EXCLUSIONS
+
+        conditions.append(
+            "all(term IN $headphone_exclusions "
+            "WHERE NOT toLower(coalesce(p.title, '')) CONTAINS term)"
+        )
+
+    # Rank likely complete keyboard products above other matches.
+    relevance_score = "0"
+
+    if category == "keyboards":
+        relevance_score = """
+        CASE
+            WHEN toLower(coalesce(p.title, '')) CONTAINS 'keyboard'
+             AND (
+                toLower(coalesce(p.title, '')) CONTAINS 'adapter'
+                OR toLower(coalesce(p.title, '')) CONTAINS 'dongle'
+                OR toLower(coalesce(p.title, '')) CONTAINS 'individual key'
+                OR toLower(coalesce(p.title, '')) CONTAINS 'key cap'
+                OR toLower(coalesce(p.title, '')) CONTAINS 'keycap'
+                OR toLower(coalesce(p.title, '')) CONTAINS 'decal'
+                OR toLower(coalesce(p.title, '')) CONTAINS 'cover'
+                OR toLower(coalesce(p.title, '')) CONTAINS 'extender'
+                OR toLower(coalesce(p.title, '')) CONTAINS 'extension cable'
+            )
+            THEN 0
+            WHEN toLower(coalesce(p.title, '')) CONTAINS 'keyboard'
+            THEN 10
+            ELSE 0
+        END
+        """
+
+    # Required feature evidence must exist in the current title or description.
+    required_text_terms = intent.get("required_text_terms") or []
+    if required_text_terms:
+        params["required_text_terms"] = required_text_terms
+        conditions.append(
+            "any(term IN $required_text_terms WHERE "
+            "toLower(coalesce(p.title, '')) CONTAINS term "
+            "OR toLower(coalesce(p.description, '')) CONTAINS term)"
+        )
+
+    # Minimum price.
+    if intent.get("min_price") is not None:
+        conditions.append(
+            "p.price IS NOT NULL AND p.price >= $min_price"
+        )
+        params["min_price"] = intent["min_price"]
+
+    # Maximum price.
+    if intent.get("max_price") is not None:
+        max_price_operator = (
+            "<" if intent.get("max_price_operator") == "<" else "<="
+        )
+        conditions.append(
+            f"p.price IS NOT NULL AND p.price {max_price_operator} $max_price"
+        )
+        params["max_price"] = intent["max_price"]
+
+    # Minimum rating.
+    if intent.get("min_rating") is not None:
+        rating_operator = (
+            ">" if intent.get("rating_operator") == ">"
+            else ">="
+        )
+
+        conditions.append(
+            "p.average_rating IS NOT NULL "
+            f"AND p.average_rating {rating_operator} $min_rating"
+        )
+        params["min_rating"] = intent["min_rating"]
+
+    where_clause = (
+        "WHERE " + " AND ".join(conditions)
+        if conditions
+        else ""
+    )
+
+    sort_key = intent.get("sort_by", "relevance")
+    order_clause = ALLOWED_SORTS.get(
+        sort_key,
+        ALLOWED_SORTS["relevance"],
+    )
+
+    limit = intent.get("limit", 10)
+
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        limit = 10
+
+    limit = max(1, min(limit, 50))
+    params["limit"] = limit
+
+    query = f"""
+    MATCH (p:Product)
+    {where_clause}
+    WITH p, {relevance_score} AS relevance_score
+    RETURN p.product_id AS product_id,
+           p.title AS title,
+           p.main_category AS category,
+           p.price AS price,
+           p.average_rating AS rating,
+           p.rating_number AS rating_count,
+           p.store AS store,
+           p.image_url AS image_url,
+           p.description AS description
+    ORDER BY {order_clause}
+    LIMIT $limit
+    """
+
+    return query.strip(), params
