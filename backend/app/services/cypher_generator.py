@@ -293,10 +293,10 @@ def generate_cypher(
         ALLOWED_SORTS["relevance"],
     )
 
-    limit = intent.get("limit", 10)
+    limit = intent.get("limit", 25)
 
     if not isinstance(limit, int) or isinstance(limit, bool):
-        limit = 10
+        limit = 25
 
     limit = max(1, min(limit, 50))
     params["limit"] = limit

@@ -21,7 +21,7 @@ def extract_intent(question: str) -> dict[str, Any]:
         "min_rating": None,
         "rating_operator": ">=",
         "sort_by": "relevance",
-        "limit": 10,
+        "limit": 25,
     }
 
     # Extract requested result count.
